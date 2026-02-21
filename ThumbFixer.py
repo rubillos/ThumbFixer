@@ -118,18 +118,10 @@ def size_of_image_file(file_ref):
 
 	return image_size
 
-def scaled_size(input_size, max_size):
+def scaled_size(input_size, thumb_width):
 	width, height = input_size
-	max_size = min(max_size, max(width, height))
 	
-	if width > height:
-		height = round(max_size / width * height)
-		width = max_size
-	else:
-		width = round(max_size / height * width)
-		height = max_size
-	
-	return (width, height)
+	return (thumb_width, round(thumb_width / width * height))
 	
 def save_image(image, path, profile):
 	with open(path, "wb") as file:
@@ -152,14 +144,18 @@ def date_from_string(date_string):
 def pluralize(str, count, pad=False):
 	return f"{count:d} {str}{'s' if count != 1 else ' ' if pad else ''}"
 
-def fixThumb(image, dest_pathx2, dest_pathx3, max_size):
-	createFolder(dest_pathx2)
-	createFolder(dest_pathx3)
-		
-	image.load()
-	profile = image.info.get("icc_profile", None)
-	save_scaled(image, scaled_size(image.size, max_size*2), dest_pathx2, Image.LANCZOS, profile)
-	save_scaled(image, scaled_size(image.size, max_size*3), dest_pathx3, Image.LANCZOS, profile)
+def fixThumb(src_path, dest_pathx2, dest_pathx3, thumb_width):
+	image = Image.open(src_path)
+	if image:
+		createFolder(dest_pathx2)
+		createFolder(dest_pathx3)
+			
+		image.load()
+		profile = image.info.get("icc_profile", None)
+		save_scaled(image, scaled_size(image.size, thumb_width*2), dest_pathx2, Image.LANCZOS, profile)
+		save_scaled(image, scaled_size(image.size, thumb_width*3), dest_pathx3, Image.LANCZOS, profile)
+	else:
+		print_error("Failed to load image:", src_path)
 
 def fixThumbs(src_folder, dest_folder):
 	src_pictures_folder = os.path.join(src_folder, picture_folder_root)
@@ -180,12 +176,6 @@ def fixThumbs(src_folder, dest_folder):
 		if not os.path.isfile(src_picture_path):
 			continue
 		
-		# Load the source image
-		image = Image.open(src_picture_path)
-		if image is None:
-			print_error("Failed to load image:", src_picture_path)
-			continue
-		
 		# Find the corresponding 1x thumbnail
 		thumb_filename = filename.replace(picture_name_root, thumb_name_root)
 		src_thumb_path = os.path.join(src_thumbs_folder, thumb_filename)
@@ -201,7 +191,7 @@ def fixThumbs(src_folder, dest_folder):
 			continue
 		
 		# Max size is the width of the 1x thumbnail
-		max_size = thumb_size[1]
+		thumb_width = thumb_size[0]
 		
 		# Create destination paths
 		dest_pathx2 = os.path.join(dest_thumbs_folderx2, thumb_filename)
@@ -209,7 +199,7 @@ def fixThumbs(src_folder, dest_folder):
 		
 		# Call fixThumb to save the new thumbnails
 		try:
-			fixThumb(image, dest_pathx2, dest_pathx3, max_size)
+			fixThumb(src_picture_path, dest_pathx2, dest_pathx3, thumb_width)
 			save_count += 1
 		except Exception as e:
 			print_error("Error processing:", filename, str(e))
