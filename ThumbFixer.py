@@ -5,18 +5,12 @@
 # pip install rich
 # pip install Pillow
 
-import sys, os, time, shutil
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from PIL import Image, ImageOps
+import os, shutil
+from datetime import datetime
+from PIL import Image
 import concurrent.futures
 from rich.console import Console
-from rich.progress import Progress, BarColumn, TimeElapsedColumn, Task
-from rich.text import Text
-from rich.padding import Padding
 from rich.theme import Theme
-from rich.panel import Panel
-import math
 
 first_bad_date = "2021-12-26"
 
@@ -24,6 +18,7 @@ src_path = "/Users/randy/Sites/PortlandAve"
 dest_path = "/Users/randy/Sites/PortlandAve-ThumbFix"
 
 src_folders = ["Local", "travel"]
+direct_folders = ["fredandkatie/Gallery"]
 
 thumb_folder_root = "thumbnails"
 thumb_folder_root_2x = "thumbnails@2x"
@@ -54,18 +49,6 @@ theme = Theme({
 
 console = Console(theme=theme)
 
-console_mid_line = False
-
-def print_now(str):
-	global console_mid_line
-	console.print(str, end="")
-	console_mid_line = True
-
-def print_cr(*args):
-	global console_mid_line
-	console.print(*args)
-	console_mid_line = False
-
 def print_error(*args, dest_console=console):
 	global console_mid_line
 	message = args[0] if len(args) >= 1 else None
@@ -91,9 +74,6 @@ def print_error(*args, dest_console=console):
 			parts.extend([error_color, " - "]) 
 		parts.extend([error_message_color, error_message]) 
 
-	if dest_console == console and console_mid_line:
-		console.print()
-		console_mid_line = False
 	dest_console.print("".join(parts))
 
 def createFolder(path):
@@ -103,59 +83,44 @@ def createFolder(path):
 		os.makedirs(path, exist_ok=True)
 		return True
 	except OSError as e:
-		print_cr(f"Error creating folder '{path}': {e}")
+		print_error(f"Error creating folder '{path}': {e}")
 		return False
 	
-def size_of_image_file(file_ref):
-	image_size = None
-
+def size_of_image_file(path):
 	try:
-		image = Image.open(file_ref)
-		# image.load()
-		image_size = image.size
-	except:
-		pass
-
-	return image_size
+		return Image.open(path).size
+	except Exception as e:
+		return None
 
 def scaled_size(input_size, thumb_width):
 	width, height = input_size
-	
 	return (thumb_width, round(thumb_width / width * height))
 	
-def save_image(image, path, profile):
+def save_scaled(image, width, path, sampling, profile):
+	new_size = scaled_size(image.size, width)
+	scaled_image = image.resize(new_size, resample=sampling)
+	createFolder(path)
 	with open(path, "wb") as file:
-		image.save(file, "JPEG", quality="high", icc_profile=profile)
-
-def save_scaled(image, size, path, sampling, profile):
-	scaled_image = image.resize(size, resample=sampling)
-	save_image(scaled_image, path, profile)
-	return (scaled_image)
+		scaled_image.save(file, "JPEG", quality="high", icc_profile=profile)
 
 def date_from_string(date_string):
 	date_string = date_string[:10]
 	if len(date_string)>0:
 		try:
 			return datetime.strptime(date_string, "%Y-%m-%d")
-		except:
-			pass	
-	return None
-
-def pluralize(str, count, pad=False):
-	return f"{count:d} {str}{'s' if count != 1 else ' ' if pad else ''}"
+		except Exception as e:
+			return None
 
 def fixThumb(src_path, dest_pathx2, dest_pathx3, thumb_width):
-	image = Image.open(src_path)
-	if image:
-		createFolder(dest_pathx2)
-		createFolder(dest_pathx3)
-			
+	try:
+		image = Image.open(src_path)
 		image.load()
 		profile = image.info.get("icc_profile", None)
-		save_scaled(image, scaled_size(image.size, thumb_width*2), dest_pathx2, Image.LANCZOS, profile)
-		save_scaled(image, scaled_size(image.size, thumb_width*3), dest_pathx3, Image.LANCZOS, profile)
-	else:
-		print_error("Failed to load image:", src_path)
+
+		save_scaled(image, thumb_width*2, dest_pathx2, Image.LANCZOS, profile)
+		save_scaled(image, thumb_width*3, dest_pathx3, Image.LANCZOS, profile)
+	except Exception as e:
+		print_error("Failed to load image:", src_path, str(e))
 
 def fixThumbs(src_folder, dest_folder):
 	src_pictures_folder = os.path.join(src_folder, picture_folder_root)
@@ -212,6 +177,23 @@ if __name__ == '__main__':
 	folder_count = 0
 	total_save_count = 0
 
+	folders_to_process = []
+
+	for direct_folder in direct_folders:
+		src_folder_path = os.path.join(src_path, direct_folder)
+		dest_folder_path = os.path.join(dest_path, direct_folder)
+		
+		if not os.path.exists(src_folder_path):
+			print_error("Source folder not found:", src_folder_path)
+			continue
+		
+		console.print(f"[green]Scanning folder: [yellow]{direct_folder}")
+
+		if os.path.exists(dest_folder_path):
+			shutil.rmtree(dest_folder_path)
+		
+		folders_to_process.append((src_folder_path, dest_folder_path, direct_folder))
+
 	# Scan each source folder
 	for folder_name in src_folders:
 		src_folder_path = os.path.join(src_path, folder_name)
@@ -221,42 +203,42 @@ if __name__ == '__main__':
 			print_error("Source folder not found:", src_folder_path)
 			continue
 		
-		console.print(f"\n[green]Scanning folder: [yellow]{folder_name}")
+		console.print(f"[green]Scanning folder: [yellow]{folder_name}")
 
 		if os.path.exists(dest_folder_path):
 			shutil.rmtree(dest_folder_path)
 		
-		folder_paths = sorted(os.listdir(src_folder_path))
-		max_folder_length = max((len(name) for name in folder_paths), default=0)
+		for subfolder_name in os.listdir(src_folder_path):
+			if len(subfolder_name) >= 10:
+				folder_date = date_from_string(subfolder_name)
+				
+				if folder_date is not None and folder_date >= date_from_string(first_bad_date):
+					subfolder_path = os.path.join(src_folder_path, subfolder_name)
+					dest_subfolder_path = os.path.join(dest_folder_path, subfolder_name)
+					folders_to_process.append((subfolder_path, dest_subfolder_path, subfolder_name))
 
-		with concurrent.futures.ThreadPoolExecutor() as executor:
-			futures = {}
-			for subfolder_name in os.listdir(src_folder_path):
-				subfolder_path = os.path.join(src_folder_path, subfolder_name)
-				
-				if not os.path.isdir(subfolder_path):
-					continue
-				
-				if len(subfolder_name) >= 10:
-					folder_date = date_from_string(subfolder_name)
-					
-					if folder_date is not None and folder_date >= date_from_string(first_bad_date):
-						dest_subfolder_path = os.path.join(dest_folder_path, subfolder_name)
-						
-						# Submit to executor instead of calling directly
-						future = executor.submit(fixThumbs, subfolder_path, dest_subfolder_path)
-						futures[future] = subfolder_name
+	console.print()
+
+	folders_to_process.sort(key=lambda x: x[2])
+	max_folder_length = max((len(subfolder_name) for _, _, subfolder_name in folders_to_process), default=0)
+
+	with concurrent.futures.ThreadPoolExecutor() as executor:
+		futures = {}
+		for subfolder_path, dest_subfolder_path, subfolder_name in folders_to_process:
+			# Submit to executor instead of calling directly
+			future = executor.submit(fixThumbs, subfolder_path, dest_subfolder_path)
+			futures[future] = subfolder_name
 			
-			# Process results as they complete
-			for future in concurrent.futures.as_completed(futures):
-				subfolder_name = futures[future]
-				try:
-					count = future.result()
-					total_save_count += count
-					folder_count += 1
-					console.print(f"  [green]✓ Completed: [yellow]{subfolder_name}" + " " * (max_folder_length - len(subfolder_name)) + f"[cyan]{count:4d} thumbs fixed")
-				except Exception as e:
-					print_error("Error in subfolder:", subfolder_name, str(e))
+		# Process results as they complete
+		for future in concurrent.futures.as_completed(futures):
+			subfolder_name = futures[future]
+			try:
+				count = future.result()
+				total_save_count += count
+				folder_count += 1
+				console.print(f"[green]✓ Completed: [yellow]{subfolder_name}" + " " * (max_folder_length - len(subfolder_name)) + f"[cyan]{count:4d} thumbs fixed")
+			except Exception as e:
+				print_error("Error in subfolder:", subfolder_name, str(e))
 
 	console.print("\n[green]Thumb fixer complete!")
 	console.print(f"[green]Processed [cyan]{folder_count} [green]folders, [green]fixed [cyan]{total_save_count} [green]thumbnails.")
